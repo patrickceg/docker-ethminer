@@ -32,7 +32,7 @@ RUN cd /minerbuild/cpp-ethereum && \
     mkdir build && \
     cd build && \
     cmake -DBUNDLE=cudaminer .. && \
-    make -j8
+    make
 
 # Move the built miner to /app
 USER root
