@@ -1,41 +1,56 @@
 FROM nvidia/cuda:8.0-devel-ubuntu16.04
 
-MAINTAINER Anthony Tatowicz
+# activate the required PPA
+RUN apt-get -qq update \
+    && apt-get -yqq --no-install-recommends install software-properties-common \
+    && add-apt-repository -y ppa:ethereum/ethereum
 
-WORKDIR /
+# install the dev and the not dev packages so we can remove the dev packages later to make
+# the image smaller
+RUN apt-get -qq update && \
+    apt-get -yqq --no-install-recommends install \ 
+    git cmake libcryptopp-dev libleveldb-dev libjsoncpp-dev libjsonrpccpp-dev \
+    libboost-all-dev libgmp-dev libreadline-dev libcurl4-gnutls-dev \
+    ocl-icd-libopencl1 opencl-headers mesa-common-dev libmicrohttpd-dev \
+    build-essential
 
-RUN apt-get update \
-    && apt-get -y install software-properties-common \
-    && add-apt-repository -y ppa:ethereum/ethereum -y \
-    && apt-get update \
-    && apt-get install -y git \
-     cmake \
-     libcryptopp-dev \
-     libleveldb-dev \
-     libjsoncpp-dev \
-     libjsonrpccpp-dev \
-     libboost-all-dev \
-     libgmp-dev \
-     libreadline-dev \
-     libcurl4-gnutls-dev \
-     ocl-icd-libopencl1 \
-     opencl-headers \
-     mesa-common-dev \
-     libmicrohttpd-dev \
-     build-essential
+# set up a user to compile everything
+RUN groupadd -r miner --gid=1001 \
+    && useradd -r -g miner --uid=1001 miner
 
-RUN git clone https://github.com/Genoil/cpp-ethereum/ \
-    && cd cpp-ethereum \
-    && mkdir build \
-    && cd build \
-    && cmake -DBUNDLE=cudaminer .. \
-    && make -j8
+# create a folder to compile
+RUN mkdir /minerbuild \
+    && chown miner.miner /minerbuild
 
+# get the miner source code from git as the user
+USER miner
+RUN cd /minerbuild && \
+    git clone https://github.com/Genoil/cpp-ethereum/
 
-ENV GPU_FORCE_64BIT_PTR=0
-ENV GPU_MAX_HEAP_SIZE=100
-ENV GPU_USE_SYNC_OBJECTS=1
-ENV GPU_MAX_ALLOC_PERCENT=100
-ENV GPU_SINGLE_ALLOC_PERCENT=100
+# now build the code
+RUN cd /minerbuild/cpp-ethereum && \
+    mkdir build && \
+    cd build && \
+    cmake -DBUNDLE=cudaminer .. && \
+    make -j8
 
-ENTRYPOINT ["/cpp-ethereum/build/ethminer/ethminer", "--farm-recheck", "200", "-U"]
+# Move the built miner to /app
+USER root
+RUN mkdir /app && \
+    mkdir /app/lib && \
+    chown -R miner.miner /app
+USER miner
+CMD ["/bin/bash"] 
+RUN mv /minerbuild/cpp-ethereum/build/ethminer/ethminer /app && \
+    mv /minerbuild/cpp-ethereum/build/**/*.so /app/lib
+
+# Do some cleanup
+USER root
+RUN rm -rf /minerbuild
+# Add the miner libraries to the LD library path
+RUN echo "/app/lib" > /etc/ld.so.conf.d/app.conf && \
+    ldconfig
+
+USER miner
+ENTRYPOINT ["/app/ethminer"]
+
